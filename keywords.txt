@@ -1,0 +1,89 @@
+##########################################################
+##        keywords.txt file for LTC2633 Library.        ##
+##########################################################
+# 	KEYWORD_TOKEN 	#Use for                             #
+# 	KEYWORD1(bold orange) 		# classes, datatypes     #
+# 	KEYWORD2(none orange) 		# methods & functions    #
+# 	KEYWORD3(none orange) 		# structures             #
+# 	LITERAL1(none cyan) 		# constants, enums,      #
+# 	LITERAL2(none orange) 		# ?, variables           #
+##########################################################
+##                   Class (KEYWORD1)                   ##
+##########################################################
+
+colorTemperature	KEYWORD1
+DAC_coefficients	KEYWORD1
+LED	KEYWORD1
+
+##########################################################
+##                 Functions (KEYWORD2)                 ##
+##########################################################
+
+setColorTemperature	KEYWORD2
+writeColorTemperature	KEYWORD2
+
+setIntensity	KEYWORD2
+writeIntensity	KEYWORD2
+
+setPowerState	KEYWORD2
+turnOn	KEYWORD2
+turnOff	KEYWORD2
+
+writeToLed	KEYWORD2
+calculateInternalValues	KEYWORD2
+writeToDAC	KEYWORD2
+
+writeRawA	KEYWORD2
+writeRawB	KEYWORD2
+writeRaw	KEYWORD2
+
+getValueA	KEYWORD2
+getValueB	KEYWORD2
+
+enableLED	KEYWORD2
+disableLED	KEYWORD2
+
+enableLEDs	KEYWORD2
+enableLED2700k	KEYWORD2
+enableLED5000k	KEYWORD2
+disableLEDs	KEYWORD2
+disableLED2700k	KEYWORD2
+disableLED5000k	KEYWORD2
+
+calculateRampUpValues	KEYWORD2
+calculateRampDownValues	KEYWORD2
+
+setSunriseAlarmTime	KEYWORD2
+setSunriseDuration	KEYWORD2
+
+setSunsetAlarmTime	KEYWORD2
+setSunsetDuration	KEYWORD2
+
+enableSunriseAlarm	KEYWORD2
+enableSunsetAlarm	KEYWORD2
+
+disableSunriseAlarm	KEYWORD2
+disableSunsetAlarm	KEYWORD2
+
+isSunriseAlarmEnabled	KEYWORD2
+isSunsetAlarmEnabled	KEYWORD2
+
+##########################################################
+##                   Enums (LITERAL1)                   ##
+##########################################################
+
+
+
+##########################################################
+##                Data Types (LITERAL1)                 ##
+##########################################################
+
+
+
+
+
+##########################################################
+##                Variables (LITERAL2)                  ##
+##########################################################
+
+
