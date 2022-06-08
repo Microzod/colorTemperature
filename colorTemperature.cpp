@@ -8,26 +8,22 @@
 #include "freertos/task.h"
 #include "driver/timer.h"
 #include "esp_timer.h"
-
-/*
 #include "esp32-hal-timer.h"
-#include "freertos/FreeRTOS.h"
 #include "freertos/xtensa_api.h"
-#include "freertos/task.h"
 #include "rom/ets_sys.h"
 #include "soc/timer_group_struct.h"
 #include "soc/dport_reg.h"
 #include "esp_attr.h"
 #include "esp_intr.h"
-*/
+
 /*
 TaskHandle_t colorTemperature::rampUpTaskHandle = NULL;
 hw_timer_t * colorTemperature::rampUpTimer = NULL;
-taskMUX_TYPE colorTemperature::rampUpTimerMux = taskMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE colorTemperature::rampUpTimerMux = portMUX_INITIALIZER_UNLOCKED;
 
 TaskHandle_t colorTemperature::rampDownTaskHandle = NULL;
 hw_timer_t * colorTemperature::rampDownTimer = NULL;
-taskMUX_TYPE colorTemperature::rampDownTimerMux = taskMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE colorTemperature::rampDownTimerMux = portMUX_INITIALIZER_UNLOCKED;
 */
 
 
@@ -39,13 +35,21 @@ TaskHandle_t colorTemperature::rampDownTaskHandle = NULL;
 hw_timer_t * colorTemperature::rampDownTimer = NULL;
 portMUX_TYPE colorTemperature::rampDownTimerMux = portMUX_INITIALIZER_UNLOCKED;
 
+uint8_t 			colorTemperature::triggerSunriseAlarm_id;
+uint8_t 			colorTemperature::triggerSunsetAlarm_id;
+DAC_coefficients 	colorTemperature::coefficients;
+DAC_coefficients 	colorTemperature::errorCoefficients;
+DAC_artificial_data colorTemperature::artificial;
+DAC_writting_data 	colorTemperature::writeValues;
+ISR_DATA 			colorTemperature::isrRampValues;
+
 //_percent_adjustmentCoefficients_DAC_A {0.0   , 0.0414, 0.0710, 0.1041, 0.1385, 0.1704, 0.2012, 0.2343, 0.2651, 0.2982, 0.3314, 0.3669, 0.4024, 0.4379, 0.4793, 0.5231, 0.5704, 0.6225, 0.6817, 0.7408, 0.8166, 0.8852, 0.9538, 1.0000},
 //_percent_adjustmentCoefficients_DAC_B {1.0000, 0.9586, 0.9290, 0.8959, 0.8615, 0.8296, 0.7988, 0.7657, 0.7349, 0.7018, 0.6686, 0.6331, 0.5976, 0.5621, 0.5207, 0.4769, 0.4296, 0.3775, 0.3183, 0.2592, 0.1834, 0.1148, 0.0462, 0.0}
 
 colorTemperature::colorTemperature( uint8_t ssrA5000k_pin = 26,
-                                                        uint8_t ssrB2700k_pin = 27,
-                                                        LTC2633_I2C_ADDRESS I2C_address = LTC2633_CA0_GLOBAL,
-                                                        TwoWire *theWire = &Wire):
+                                    uint8_t ssrB2700k_pin = 27,
+                                    LTC2633_I2C_ADDRESS I2C_address = LTC2633_CA0_GLOBAL,
+                                    TwoWire *theWire = &Wire):
 _CCT {5000, 4900, 4800, 4700, 4600, 4500, 4400, 4300, 4200, 4100, 4000, 3900, 3800, 3700, 3600, 3500, 3400, 3300, 3200, 3100, 3000, 2900, 2800, 2700},
 _adjustmentCoefficients_DAC_A {0,170,291,426,567,698,824,959,1086,1221,1357,1502,1648,1793,1963,2142,2336,2549,2792,3034,3344,3625,3906,4095},
 _adjustmentCoefficients_DAC_B {4095,3925,3804,3669,3528,3397,3271,3136,3009,2874,2738,2593,2447,2302,2132,1953,1759,1546,1303,1061,751,470,189,0},
@@ -67,11 +71,14 @@ void colorTemperature::begin(uint8_t timerForRampUp = 1, uint8_t timerForRampDow
     setColorTemperature(3900);
     
     // Set a default value for the light intensity:
-    coefficients.Intensity = 2047;
+    coefficients.Intensity = 1023;
+	
+	turnOff();
     
     // Start the LTC2633 I2C communication and set it to use 400kHz:
     LTC2633.begin(1);
     LTC2633.setI2CFastClockSpeed();
+	LTC2633.powerDownChip();
     
     // Set the relay control pins to it's 'OFF' state:
     pinMode(_SSR_A_5000k_pin, OUTPUT);
@@ -86,28 +93,30 @@ void colorTemperature::begin(uint8_t timerForRampUp = 1, uint8_t timerForRampDow
     errorCoefficients.raw_A = 5000;
     errorCoefficients.raw_B = 5000;
     errorCoefficients.valueMatchFlag = 4;
-    
+
+    //setupTimeAlarms();
     // Prepare the TimeAlarms alarm used to trigger a Sunrise:
-    triggerSunriseAlarm_id = Alarm.alarmRepeat(0, triggerSunriseFunction);
+    triggerSunriseAlarm_id = Alarm.alarmRepeat(1500, triggerSunriseFunction);
     Alarm.disable(triggerSunriseAlarm_id);
     
     // Prepare the TimeAlarms alarm used to trigger a Sunset:
-    triggerSunsetAlarm_id = Alarm.alarmRepeat(0, triggerSunsetFunction);
+    triggerSunsetAlarm_id = Alarm.alarmRepeat(1000, triggerSunsetFunction);
     Alarm.disable(triggerSunsetAlarm_id);
     
     // Start the rampUpTask Task:
     xTaskCreatePinnedToCore(&rampUpTask,
                             "rampUpTask",
-                            2048,                           // BaseType_t xTaskCreatePinnedToCore
-                            NULL,                           // (
-                            2,                              //     TaskFunction_t      pvTaskCode,
-                            &colorTemperature::rampUpTaskHandle,              //     const char *const   pcName,
-                            1);                             //     const uint32_t      usStackDepth,
-                                                            //     void *const         pvParameters,
-    // Start the rampDownTask Task:                         //     UBaseType_t         uxPriority,
-    xTaskCreatePinnedToCore(&rampDownTask,                  //     TaskHandle_t *const pvCreatedTask,
-                            "rampDownTask",                 //     const BaseType_t    xCoreID
-                            2048,                           // )
+                            2048,                           					// BaseType_t xTaskCreatePinnedToCore
+                            NULL,                           					// (
+                            2,                              					//     TaskFunction_t      pvTaskCode,
+                            &colorTemperature::rampUpTaskHandle,              	//     const char *const   pcName,
+                            1);                             					//     const uint32_t      usStackDepth,
+																				//     void *const         pvParameters,
+																				//     UBaseType_t         uxPriority,
+	// Start the rampDownTask Task:                         					//     TaskHandle_t *const pvCreatedTask,
+    xTaskCreatePinnedToCore(&rampDownTask,                  					//     const BaseType_t    xCoreID
+                            "rampDownTask",                 					// )
+                            2048,                           					
                             NULL,
                             2,
                             &rampDownTaskHandle,
@@ -181,16 +190,62 @@ DAC_coefficients colorTemperature::writeIntensity(uint16_t intensity)
     return coefficients;
 }
 
+void colorTemperature::setPowerState(uint8_t onOrOff)
+{
+	_onOrOff = onOrOff;
+}
+
+void colorTemperature::turnOn()
+{
+	_onOrOff = 1;
+}
+
+void colorTemperature::turnOff()
+{
+	_onOrOff = 0;
+}
+
 DAC_coefficients colorTemperature::writeToLed()
 {
     if (coefficients.valueMatchFlag)
     {
         calculateInternalValues();
-        writeToDAC();
+        
+		if (_onOrOff)
+		{
+			digitalWrite(_SSR_A_5000k_pin, HIGH);
+			digitalWrite(_SSR_B_2700k_pin, HIGH);
+			writeToDAC();
+		}
+		else
+		{
+			LTC2633.powerDownChip();
+			digitalWrite(_SSR_A_5000k_pin, LOW);
+			digitalWrite(_SSR_B_2700k_pin, LOW);
+		}
         return coefficients;
     }
     
     return errorCoefficients;
+}
+
+void colorTemperature::calculateInternalValues()
+{
+    writeValues.artificialMaxValue = coefficients.Intensity;
+    
+    double resultA = (coefficients.Intensity * (coefficients.A / 4095)) + 0.5;
+    double resultB = (coefficients.Intensity * (coefficients.B / 4095)) + 0.5;
+    
+    writeValues.A = (uint16_t)resultA;
+    writeValues.B = (uint16_t)resultB;
+    
+    writeValues.written_A_plus_B = writeValues.A + writeValues.B;
+}
+
+void colorTemperature::writeToDAC()
+{
+    LTC2633.A.write(writeValues.A);
+    LTC2633.B.write(writeValues.B);
 }
 
 int8_t colorTemperature::writeRawA(uint16_t valueA)
@@ -213,14 +268,30 @@ int8_t colorTemperature::writeRaw(uint16_t valueA, uint16_t valueB)
     return LTC2633.B.write(valueB);
 }
 
-uint16_t colorTemperature::getInternalValueA()
+uint16_t colorTemperature::getValueA()
 {
     return writeValues.A;
 }
 
-uint16_t colorTemperature::getInternalValueB()
+uint16_t colorTemperature::getValueB()
 {
     return writeValues.B;
+}
+
+void colorTemperature::enableLED(char led)
+{
+	if (led == 'A')
+		digitalWrite(_SSR_A_5000k_pin, HIGH);
+	else if (led == 'B')
+		digitalWrite(_SSR_B_2700k_pin, HIGH);
+}
+
+void colorTemperature::disableLED(char led)
+{
+	if (led == 'A')
+		digitalWrite(_SSR_A_5000k_pin, LOW);
+	else if (led == 'B')
+		digitalWrite(_SSR_B_2700k_pin, LOW);
 }
 
 void colorTemperature::enableLEDs()
@@ -253,25 +324,6 @@ void colorTemperature::disableLED2700k()
 void colorTemperature::disableLED5000k()
 {
     digitalWrite(_SSR_A_5000k_pin, LOW);
-}
-
-void colorTemperature::calculateInternalValues()
-{
-    writeValues.artificialMaxValue = coefficients.Intensity;
-    
-    double resultA = (coefficients.Intensity * (coefficients.A / 4095)) + 0.5;
-    double resultB = (coefficients.Intensity * (coefficients.B / 4095)) + 0.5;
-    
-    writeValues.A = (uint16_t)resultA;
-    writeValues.B = (uint16_t)resultB;
-    
-    writeValues.written_A_plus_B = writeValues.A + writeValues.B;
-}
-
-void colorTemperature::writeToDAC()
-{
-    LTC2633.A.write(writeValues.A);
-    LTC2633.B.write(writeValues.B);
 }
 
 /*
@@ -348,11 +400,11 @@ void colorTemperature::triggerSunriseFunction()
     
     uint32_t tempRampValue_uS = isrRampValues.rampUpUpdateInterval_uS;
     
-    xTaskNotify(colorTemperature::rampUpTaskHandle,   // The handle of the task being notified.
+    xTaskNotify(colorTemperature::rampUpTaskHandle,   // The handle of the port being notified.
                 0,                  // Data that can be sent with the notification. How the data is used depends on the value of the eAction parameter.
                  eNoAction);            // eIncrement/eDecrement?/eSetValueWithOverwrite/eSetValueWithoutOverwrite/eNoAction
     
-    timerWriteAlarm(rampUpTimer, tempRampValue_uS, true);
+    timerAlarmWrite(rampUpTimer, tempRampValue_uS, true);
     timerStart(rampUpTimer);
     timerAlarmEnable(rampUpTimer);
 }
@@ -364,11 +416,11 @@ void colorTemperature::triggerSunsetFunction()
     
     uint32_t tempRampValue_uS = isrRampValues.rampDownUpdateInterval_uS;
     
-    xTaskNotify(rampDownTaskHandle, // The handle of the task being notified.
+    xTaskNotify(rampDownTaskHandle, // The handle of the port being notified.
                 0,                  // Data that can be sent with the notification. How the data is used depends on the value of the eAction parameter.
                  eNoAction);            // eIncrement/eDecrement?/eSetValueWithOverwrite/eSetValueWithoutOverwrite/eNoAction
     
-    timerWriteAlarm(rampDownTimer, tempRampValue_uS, true);
+    timerAlarmWrite(rampDownTimer, tempRampValue_uS, true);
     timerStart(rampDownTimer);
     timerAlarmEnable(rampDownTimer);
 }
@@ -436,13 +488,16 @@ bool colorTemperature::isSunsetAlarmEnabled()
     return isrRampValues.rampDownIsEnabled;
 }
 
+
+colorTemperature LED = colorTemperature(26, 27, LTC2633_CA0_VCC, &Wire);
+
 // Timer Interrupt related functions:
 void IRAM_ATTR rampUp_ISR()
 {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     
-    portENTER_CRITICAL_ISR(&colorTemperature::rampUpTimerMux);  // Preemptive context switches cannot occur when in between taskENTER_CRITICAL_ISR and taskEXIT_CRITICAL_ISR.
-    xTaskNotifyFromISR( colorTemperature::rampUpTaskHandle,        // The handle of the task being notified.
+    portENTER_CRITICAL_ISR(&colorTemperature::rampUpTimerMux);  // Preemptive context switches cannot occur when in between portENTER_CRITICAL_ISR and portEXIT_CRITICAL_ISR.
+    xTaskNotifyFromISR( colorTemperature::rampUpTaskHandle,        // The handle of the port being notified.
                         1,                                      // Data that can be sent with the notification. How the data is used depends on the value of the eAction parameter.
                         eNoAction,                              // eIncrement/eDecrement?/eSetValueWithOverwrite/eSetValueWithoutOverwrite/eNoAction
                         &xHigherPriorityTaskWoken);             // will get set to pdTRUE if a context switch should be performed before exiting the ISR.
@@ -467,7 +522,7 @@ void rampUpTask(void *pvParameters)
     for (;;)
     {
         // Waiting for the very first notification to start the loop:
-        ulTaskNotifyTake(pdTRUE, taskMAX_DELAY);
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         
         // Set the used variables to there original state:        
         valueOfDAC_A        = colorTemperature::isrRampValues.rampUpStartValueA;
@@ -477,7 +532,7 @@ void rampUpTask(void *pvParameters)
         maxValueRampCounter = colorTemperature::isrRampValues.maxValueForRampUpCounter;
         rampCounter = 0;
         twoFlags = 0;
-        restartThisTask = FALSE;
+        restartThisTask = 0;
         
         while (!restartThisTask)
         {
@@ -485,7 +540,7 @@ void rampUpTask(void *pvParameters)
             
             if (valueOfDAC_A <= targetValueOfDAC_A)
             {
-                ulTaskNotifyTake(pdTRUE, taskMAX_DELAY);
+                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
                 
                 portENTER_CRITICAL(&colorTemperature::rampUpTimerMux);
                 LED.LTC2633.A.write(valueOfDAC_A++);    // Write to DAC the value of rampUp_valueOfDAC_A++.
@@ -497,7 +552,7 @@ void rampUpTask(void *pvParameters)
             
             if (valueOfDAC_B <= targetValueOfDAC_B)
             {
-                ulTaskNotifyTake(pdTRUE, taskMAX_DELAY);
+                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
                 
                 portENTER_CRITICAL(&colorTemperature::rampUpTimerMux);
                 LED.LTC2633.B.write(valueOfDAC_B++);    // Write to DAC the value of rampUp_valueOfDAC_B++.
@@ -505,21 +560,21 @@ void rampUpTask(void *pvParameters)
                 portEXIT_CRITICAL(&colorTemperature::rampUpTimerMux);
             }
             
-            //ulTaskNotifyTake(pdTRUE, taskMAX_DELAY);
+            //ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             
             if (rampCounter >= maxValueRampCounter)
             {
-                restartThisTask = TRUE;
-                isrRampValues.isRampingUp = 0;
+                restartThisTask = 1;
+                colorTemperature::isrRampValues.isRampingUp = 0;
             }
             
         }
         //goto topOfRampUp;
-        timerAlarmDisable(rampUpTimer);
-        timerStop(rampUpTimer);
+        timerAlarmDisable(colorTemperature::rampUpTimer);
+        timerStop(colorTemperature::rampUpTimer);
     }
     
-    // Insurance preventing task returning never-ever:
+    // Insurance preventing port returning never-ever:
     vTaskDelete( NULL );
 }
     
@@ -527,8 +582,8 @@ void IRAM_ATTR rampDown_ISR()
 {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     
-    portENTER_CRITICAL_ISR(&colorTemperature::rampDownTimerMux);// Preemptive context switches cannot occur when in between taskENTER_CRITICAL_ISR and taskEXIT_CRITICAL_ISR.
-    xTaskNotifyFromISR( colorTemperature::rampDownTaskHandle, // The handle of the task being notified.
+    portENTER_CRITICAL_ISR(&colorTemperature::rampDownTimerMux);// Preemptive context switches cannot occur when in between portENTER_CRITICAL_ISR and portEXIT_CRITICAL_ISR.
+    xTaskNotifyFromISR( colorTemperature::rampDownTaskHandle, // The handle of the port being notified.
                         0,                                      // Data that can be sent with the notification. How the data is used depends on the value of the eAction parameter.
                         eNoAction,                              // eIncrement/eDecrement?/eSetValueWithOverwrite/eSetValueWithoutOverwrite/eNoAction
                         &xHigherPriorityTaskWoken);             // will get set to pdTRUE if a context switch should be performed before exiting the ISR.
@@ -553,7 +608,7 @@ void rampDownTask(void *pvParameters)
     for (;;)
     {
         // Waiting for the very first notification to start the loop:
-        ulTaskNotifyTake(pdTRUE, taskMAX_DELAY);
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         
         // Set the used variables to there original state:        
         valueOfDAC_A        = colorTemperature::isrRampValues.rampDownStartValueA;
@@ -563,7 +618,7 @@ void rampDownTask(void *pvParameters)
         maxValueRampCounter = 0;
         rampCounter = colorTemperature::isrRampValues.maxValueForRampDownCounter;;
         twoFlags = 0;
-        restartThisTask = FALSE;
+        restartThisTask = 0;
         
         while (!restartThisTask)
         {
@@ -571,7 +626,7 @@ void rampDownTask(void *pvParameters)
             
             if (valueOfDAC_A)
             {
-                ulTaskNotifyTake(pdTRUE, taskMAX_DELAY);
+                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
                 
                 portENTER_CRITICAL(&colorTemperature::rampDownTimerMux);
                 LED.LTC2633.A.write(valueOfDAC_A--);    // Write to DAC the value of rampUp_valueOfDAC_A++.
@@ -583,7 +638,7 @@ void rampDownTask(void *pvParameters)
             
             if (valueOfDAC_B)
             {
-                ulTaskNotifyTake(pdTRUE, taskMAX_DELAY);
+                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
                 
                 portENTER_CRITICAL(&colorTemperature::rampDownTimerMux);
                 LED.LTC2633.B.write(valueOfDAC_B--);    // Write to DAC the value of rampUp_valueOfDAC_B++.
@@ -591,21 +646,21 @@ void rampDownTask(void *pvParameters)
                 portEXIT_CRITICAL(&colorTemperature::rampDownTimerMux);
             }
             
-            //ulTaskNotifyTake(pdTRUE, taskMAX_DELAY);
+            //ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             
             if (!rampCounter)
             {
-                restartThisTask = TRUE;
-                isrRampValues.isRampingDown = 0;
+                restartThisTask = 1;
+                colorTemperature::isrRampValues.isRampingDown = 0;
             }
             
         }
         //goto topOfRampUp;
-        timerAlarmDisable(rampDownTimer);
-        timerStop(rampDownTimer);
+        timerAlarmDisable(colorTemperature::rampDownTimer);
+        timerStop(colorTemperature::rampDownTimer);
     }
     
-    // Insurance preventing task returning never-ever:
+    // Insurance preventing port returning never-ever:
     vTaskDelete( NULL );
 }
 
@@ -637,9 +692,9 @@ public:
             
             cct.calculateRampUpValues();
             cct.rampValues.isRampingUp = 1;
-            restartThisTask = FALSE;
+            restartThisTask = 0;
             
-            //?? Store the handle of the calling task.
+            //?? Store the handle of the calling port.
             //??xRampUpTaskNotify_handle = xTaskGetCurrentTaskHandle();
             
             // Set the used variables to there original state:        
@@ -677,14 +732,14 @@ public:
                 
                 rampCounter += valueOfDAC_B;
                 
-                restartThisTask = TRUE;
+                restartThisTask = 1;
                 
             }
             
             //goto topOfRampUp;
         }
     
-        // Insurance preventing task returning never-ever:
+        // Insurance preventing port returning never-ever:
         vTaskDelete( NULL );
     }
 
