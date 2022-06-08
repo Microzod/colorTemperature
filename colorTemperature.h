@@ -1,11 +1,13 @@
-#ifndef _COLOR_TEMPERATURE_H_
-#define _COLOR_TEMPERATURE_H_
+#ifndef _CORRELATED_COLOR_TEMPERATURE_H_
+#define _CORRELATED_COLOR_TEMPERATURE_H_
 
 #include <Arduino.h>
 #include <LTC2633Library.h>
 #include <TimeLib.h>
 #include <TimeAlarms.h>
 
+#include "driver/timer.h"
+#include "esp_timer.h"
 
 #include "esp32-hal-timer.h"
 #include "freertos/FreeRTOS.h"
@@ -27,17 +29,7 @@ struct DAC_coefficients
     uint16_t Intensity = 0; 
     uint8_t valueMatchFlag = 0;
 };
-/*
-struct DAC_coefficients
-{
-    uint16_t A;
-    uint16_t B;
-    uint16_t raw_A;
-    uint16_t raw_B;
-    uint16_t Intensity; 
-    uint8_t valueMatchFlag;
-};
-*/
+
 struct DAC_artificial_data
 {
     const double IntensityPerCount = 0.00024421;
@@ -98,33 +90,28 @@ void rampDownTask(void *pvParameters);
 class colorTemperature /*correlatedColorTemperature*/
 {
     public:
+        
         const uint16_t _CCT[24]; // Array with _CCT values to be compared with input for match, from myIndex 0 - 24 = 5000k - 2700k.
+		// enum {CCT5000, degree4900, DEGREE4800, deg4700, DEG4600, D4500, F4400, CCT4300, CCT4200, CCT4100, CCT4000, CCT3900, CCT3800, CCT3700, CCT3600, CCT3500, CCT3400, CCT3300, CCT3200, CCT3100, CCT3000, CCT2900, CCT2800, CCT2700, CCTmaxIndex};
         const uint16_t _adjustmentCoefficients_DAC_A[24];   // DAC_A = 2700 °K - coefficients corresponding to _CCT[].
         const uint16_t _adjustmentCoefficients_DAC_B[24];   // DAC_B = 5000 °K - coefficients corresponding to _CCT[].
+		//const double _percent_adjustmentCoefficients_DAC_A[24];
+        //const double _percent_adjustmentCoefficients_DAC_B[24];
+        
+        static uint8_t triggerSunriseAlarm_id;
+        static uint8_t triggerSunsetAlarm_id;
         
         LTC2633Library LTC2633;
-        DAC_coefficients coefficients;
-        DAC_coefficients errorCoefficients;
-        DAC_artificial_data artificial;
-        DAC_writting_data writeValues;
+        static DAC_coefficients coefficients;
+        static DAC_coefficients errorCoefficients;
+        static DAC_artificial_data artificial;
+        static DAC_writting_data writeValues;
         static ISR_DATA isrRampValues;
 
         uint8_t _SSR_B_2700k_pin;
         uint8_t _SSR_A_5000k_pin;
-
-        
-        
         uint8_t _arrayLength;
-
-        /*
-        volatile static TaskHandle_t rampUpTaskHandle = nullptr;
-        volatile static hw_timer_t * rampUpTimer = NULL;
-        volatile static portMUX_TYPE rampUpTimerMux = taskMUX_INITIALIZER_UNLOCKED;
-        
-        volatile static TaskHandle_t rampDownTaskHandle = NULL;
-        volatile static hw_timer_t * rampDownTimer = NULL;
-        volatile static portMUX_TYPE rampDownTimerMux = taskMUX_INITIALIZER_UNLOCKED;
-        */
+		
         static TaskHandle_t rampUpTaskHandle;
         static hw_timer_t * rampUpTimer;
         static portMUX_TYPE rampUpTimerMux;
@@ -132,23 +119,14 @@ class colorTemperature /*correlatedColorTemperature*/
         static TaskHandle_t rampDownTaskHandle;
         static hw_timer_t * rampDownTimer;
         static portMUX_TYPE rampDownTimerMux;
+		
+		uint8_t _timerUsedFor_RampUp;
+        uint8_t _timerUsedFor_RampDown;
+		uint8_t _onOrOff;
+		uint8_t _needToCalculate;
         
     //protected:
-        uint8_t _timerUsedFor_RampUp;
-        uint8_t _timerUsedFor_RampDown;
         
-    //public:
-        
-        // enum {CCT5000, CCT4900, CCT4800, CCT4700, CCT4600, CCT4500, CCT4400, CCT4300, CCT4200, CCT4100, CCT4000, CCT3900, CCT3800, CCT3700,      CCT3600, CCT3500, CCT3400, CCT3300, CCT3200, CCT3100, CCT3000, CCT2900, CCT2800, CCT2700, CCTmaxIndex};
-        
-        // String status;
-        // time_t startOfDay_t;
-        // time_t endOfDay_t;
-        // time_t rampUpTime_t;
-        // time_t rampDownTime_t;
-        // uint16_t cct;
-        // double intensityStep;
-        // double intensityControl;
         
         colorTemperature(uint8_t ssr2700k_pin, uint8_t ssr5000k_pin, LTC2633_I2C_ADDRESS I2C_address, TwoWire *theWire);
         
@@ -159,16 +137,25 @@ class colorTemperature /*correlatedColorTemperature*/
         
         DAC_coefficients setIntensity(uint16_t intensity);
         DAC_coefficients writeIntensity(uint16_t intensity);
+		
+		void setPowerState(uint8_t onOrOff);
+		void turnOn();
+		void turnOff();
         
         DAC_coefficients writeToLed(); // write to the DAC's using the values set with setColorTemperature() & setIntensity().
+		static void calculateInternalValues();
+        void writeToDAC();
         
         int8_t writeRawA(uint16_t valueA);
         int8_t writeRawB(uint16_t valueB);
         int8_t writeRaw(uint16_t valueA, uint16_t valueB);
         
-        uint16_t getInternalValueA();
-        uint16_t getInternalValueB();
+        uint16_t getValueA();
+        uint16_t getValueB();
         
+		void enableLED(char led);
+		void disableLED(char led);
+		
         void enableLEDs();
         void enableLED2700k();
         void enableLED5000k();
@@ -176,15 +163,12 @@ class colorTemperature /*correlatedColorTemperature*/
         void disableLED2700k();
         void disableLED5000k();
         
-        void calculateInternalValues();
-        void writeToDAC();
-        
         // Timer related functions:
-        uint32_t calculateRampUpValues();
-        uint32_t calculateRampDownValues();
+        static uint32_t calculateRampUpValues();
+        static uint32_t calculateRampDownValues();
         
-        void triggerSunriseFunction();
-        void triggerSunsetFunction();
+        static void triggerSunriseFunction();
+        static void triggerSunsetFunction();
         
         void setSunriseAlarmTime(time_t turnOnTime);
         void setSunriseDuration(time_t sunriseLength_seconds);
@@ -193,57 +177,22 @@ class colorTemperature /*correlatedColorTemperature*/
         void setSunsetDuration(time_t sunsetLength_seconds);
         
         void enableSunriseAlarm();
+		void enableSunsetAlarm();
+		
         void disableSunriseAlarm();
+		void disableSunsetAlarm();
+		
         bool isSunriseAlarmEnabled();
-        
-        void enableSunsetAlarm();
-        void disableSunsetAlarm();
-        bool isSunsetAlarmEnabled();
-        
-    //protected:
-    //public:
-        double _Intensity;
-        //double _IntensityPerCount = 0.00024421;
-        double _adjustedBaseValue;
-        uint16_t _adjustedBaseValue_uint;
-        //double _resultA;
-        //double _resultB;
-        uint16_t _valueWrittenToDAC_A;
-        uint16_t _valueWrittenToDAC_B;
-        uint16_t _combinedValueWrittenToBothDAC;
-        
-        //const double _percent_adjustmentCoefficients_DAC_A[24];
-        //const double _percent_adjustmentCoefficients_DAC_B[24];
-        
-        
-        
-    //public:
-        
-        AlarmID_t triggerSunriseAlarm_id;
-        AlarmID_t triggerSunsetAlarm_id;
-        
-        time_t timeToTriggerSunrise;
-        time_t timeToTriggerSunset;
-        
-        const double percentPerCount = 0.00024421;
-        
-        uint8_t rampUpIsEnabled;
-        uint8_t rampDownIsEnabled;
-        uint16_t rampUpCounter;
-        uint16_t rampDownCounter;
-        double rampUpIntensity;
-        double rampDownIntensity;
-        
-        bool rampUpTask_Restart;
-        bool rampDownTask_Restart;
+		bool isSunsetAlarmEnabled();
 };
 
-//extern colorTemperature LED(26, 27, LTC2633_CA0_VCC, &Wire);
+extern colorTemperature LED;
+
 
 #endif  //  _COLOR_TEMPERATURE_H_
 
 
-//
+// const double percentPerCount = 0.00024421;
 //
 // 1 / 4095 = 0.00024420024420024420024420024420024
 //            0.0002442002442002442
@@ -334,3 +283,102 @@ class colorTemperature /*correlatedColorTemperature*/
 // ¤> double CCT_2900k_DAC_B = 0.1148;
 // ¤> double CCT_2800k_DAC_B = 0.0462;
 // ¤> double CCT_2700k_DAC_B = 0;
+// ¤> 
+// ¤> 
+// ¤> TO-DO LIST:
+// ¤> Skriv koden som kan kontroller lampans AV/PÅ läge enligt dataStruct information.
+// ¤> Gradvis tända/släcka lampan, enligt timeFrame(ifrån helt AV till helt PÅ), intensityLevel(nivån som är "helt PÅ"), DACStepCount = intensityLevel / timeFrame.
+// ¤> 
+// ¤> 
+// ¤> 
+// ¤> 
+// ¤> 
+// ¤> 
+// ¤> 
+// ¤> 
+// ¤> 
+// ¤> 
+// ¤> 
+// ¤> 
+// ¤> 
+// 
+// 1.0 / 4096 = 0.000244140625
+// 100 / 4096 = 0.0244140625
+// 
+// 
+// 1.0 / 4095 = 0.00024420024420024420024420024420024
+// 100 / 4095 = 0.02442002442002442002442002442002
+//              
+/*
+#include "PinDefinitionsAndMore.h"
+
+#include <IRremote.hpp>
+
+        void setupIrSensor()
+        {
+            // Start the receiver and if not 3. parameter specified, take LED_BUILTIN pin from the internal boards definition as default feedback LED
+            IrReceiver.begin(IR_RECEIVE_PIN, ENABLE_LED_FEEDBACK);
+        
+            Serial.print(F("Ready to receive IR signals of protocols: "));
+            printActiveIRProtocols(&Serial);
+            Serial.println(F("at pin " STR(IR_RECEIVE_PIN)));
+        }
+
+
+
+
+
+        void readIrSensor()
+        {
+            if (IrReceiver.decode())
+            {
+                
+                IrReceiver.printIRResultShort(&Serial);                     // Print a short summary of received data
+                if (IrReceiver.decodedIRData.protocol == UNKNOWN)
+                    IrReceiver.printIRResultRawFormatted(&Serial, true);    // We have an unknown protocol here, print more info
+                
+                Serial.println();
+                
+                IrReceiver.resume();                                        // Enable receiving of the next value
+                 
+                //check the received data and perform actions according to the received command
+                if (IrReceiver.decodedIRData.command == 0x10)
+                {
+                    // do something
+                }
+                else if (IrReceiver.decodedIRData.command == 0x11)
+                {
+                    // do something else
+                }
+            }
+        }
+*/
+
+/*
+hw_timer_t * timer = NULL;
+portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+
+void IRAM_ATTR onTimer()
+{
+    portENTER_CRITICAL_ISR(&timerMux);
+    
+    xSemaphoreGive();
+    
+    portEXIT_CRITICAL_ISR(&timerMux);
+}
+
+void setup()
+{
+    timer = timerBegin(0, 80, true);                // timer 0, MWDT clock period = 12.5 ns * TIMGn_Tx_WDT_CLK_PRESCALE -> 12.5 ns * 80 -> 1000 ns = 1 us, countUp.
+    timerAttachInterrupt(timer, &onTimer, true);    // edge (not level) triggered.
+    timerAlarmWrite(timer, TIMER_TIME, true);       // 1000000 * 1 us = 1 s, autoreload true.
+    timerAlarmEnable(timer);                        // enable
+}
+
+void task()
+{
+    timerAlarmDisable(timer);                   // Disable the ISR.
+    timerAlarmWrite(timer, TIMER_TIME, true);   // ISR trigger interval, autoreload true.
+    timerAlarmEnable(timer);                    // Re-enable the ISR again.
+}
+*/
